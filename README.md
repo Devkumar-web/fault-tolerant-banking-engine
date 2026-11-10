@@ -100,7 +100,7 @@ The protocol uses network byte order (big-endian) for all multi-byte fields. Nat
 | `0..3` | 4 | `Magic` | Must equal `0x42414e4b` (`BANK` in ASCII) |
 | `4..5` | 2 | `Version` | Protocol version; must equal `2` |
 | `6..7` | 2 | `Command` | Command identifier (e.g., `CMD_LOGIN = 1`) |
-| `8..11` | 4 | `Payload Length` | Length of attached payload; bounded to $\le 256$ bytes |
+| `8..11` | 4 | `Payload Length` | Length of attached payload; bounded to <= 256 bytes |
 | `12..15` | 4 | `Reserved` | Reserved flags; must be `0` |
 | `16..23` | 8 | `Request ID` | Monotonic, non-zero client request identifier |
 
@@ -119,7 +119,9 @@ The protocol uses network byte order (big-endian) for all multi-byte fields. Nat
 
 Every response repeats the original client's `Request ID` and sets `command | 0x8000`. The response payload is exactly 20 bytes:
 
-$$\text{Reply Payload} = [\text{status: u32 (4B)}] + [\text{transaction\_id: u64 (8B)}] + [\text{balance\_paise: u64 (8B)}]$$
+```text
+Reply Payload = [status: u32 (4 bytes)] + [transaction_id: u64 (8 bytes)] + [balance_paise: u64 (8 bytes)]
+```
 
 | Status Code | Value | Description |
 |:---|:---:|:---|
@@ -141,12 +143,12 @@ $$\text{Reply Payload} = [\text{status: u32 (4B)}] + [\text{transaction\_id: u64
 ## Storage Engine & Concurrency Control
 
 ### Deadlock-Free Two-Phase Record Locking
-When transferring funds between account $A$ and account $B$, concurrent reverse transfers ($A \to B$ and $B \to A$) can trigger classic deadlocks under naive locking.
+When transferring funds between Account A and Account B, concurrent reverse transfers (A → B and B → A) can trigger classic deadlocks under naive locking.
 
 The engine prevents this in `lock_two_customer_records()` ([`src/account_storage.c`](src/account_storage.c)):
-1. Determines byte offsets for both accounts: $\text{off}_1$ and $\text{off}_2$.
-2. Acquires exclusive POSIX record write lock (`F_WRLCK`) on $\min(\text{off}_1, \text{off}_2)$.
-3. Acquires exclusive write lock on $\max(\text{off}_1, \text{off}_2)$.
+1. Determines byte offsets for both accounts: `offset1` and `offset2`.
+2. Acquires exclusive POSIX record write lock (`F_WRLCK`) on `min(offset1, offset2)`.
+3. Acquires exclusive write lock on `max(offset1, offset2)`.
 4. If the second lock fails, the first lock is immediately released.
 5. Imposing a global acquisition order eliminates Coffman's circular-wait condition.
 
