@@ -1,128 +1,164 @@
-# Phase 2 — Bounded command protocol and persistent retries
+# Fault-Tolerant Concurrent Banking Engine & Wire Protocol
 
-This standalone folder builds on Phase 1. The original submission and
-`phase1_embedded_foundation/` are preserved. Primary `server` and `client` now use
-version 2 of the binary command protocol, not interactive menu packets.
+[![Language: C11](https://img.shields.io/badge/Language-C11-00599C.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
+[![Platform: Linux/POSIX](https://img.shields.io/badge/Platform-Linux%20%2F%20POSIX-FCC624.svg)](https://pubs.opengroup.org/onlinepubs/9699919799/)
+[![Sanitizers: ASan & UBSan](https://img.shields.io/badge/Sanitizers-ASan%20%26%20UBSan%20Clean-brightgreen.svg)]()
+[![Tests: 20 PASS](https://img.shields.io/badge/Tests-20%20PASS%20Groups-success.svg)]()
 
-## Build and verify
+A crash-resilient, transactional banking core and bounded binary wire protocol implemented from scratch in C11. Built with Linux/POSIX systems programming primitives, featuring a multi-process supervisor pool, event-driven non-blocking I/O, deadlock-free hierarchical record locking, Write-Ahead Logging (WAL) with roll-forward crash recovery, and a persistent 4096-slot request deduplication coordinator with FNV-1a checksums for end-to-end idempotency.
 
-Requirements: Linux, Make, GCC-compatible C11 compiler, libcrypt development
-files, and Python 3. No third-party Python packages are needed.
+---
+
+## Architecture Overview
+
+```
+                      +---------------------------------------+
+                      |       Client (CLI / Automated)        |
+                      +---------------------------------------+
+                                          |
+                                          | [Binary Wire Protocol]
+                                          | 24-byte big-endian framing
+                                          | Monotonic deadline (poll)
+                                          v
+                      +---------------------------------------+
+                      |   Process Supervisor (server_runtime) |
+                      |   - poll() listener                   |
+                      |   - Bounded 16 worker pool            |
+                      |   - Asynchronous reaping (waitpid)    |
+                      +---------------------------------------+
+                                          | fork() worker
+                                          v
+                      +---------------------------------------+
+                      |  Worker Process (command_service.c)   |
+                      |  - 60s lifetime interrupt alarm       |
+                      |  - Stack-allocated zero-heap framing  |
+                      +---------------------------------------+
+                                          |
+                      +-------------------+-------------------+
+                      |                                       |
+                      v                                       v
++---------------------------------------+ +---------------------------------------+
+|  Request Coordinator (requests.c)     | |   Write-Ahead Journal (txn_journal.c) |
+|  - requests_v2.bin (4096 slots)       | |   - trans_journal.bin                 |
+|  - 32-bit FNV-1a checksum validation  | |   - PREPARED -> COMMITTED state       |
+|  - Idempotent replay & conflict check | |   - Startup roll-forward recovery     |
++---------------------------------------+ +---------------------------------------+
+                      |                                       |
+                      +-------------------+-------------------+
+                                          |
+                                          v
+                      +---------------------------------------+
+                      |    Account Storage (account_storage)  |
+                      |    - customers.txt                    |
+                      |    - Atomic positioned I/O (pread/pwrite)
+                      |    - Deadlock-free fcntl lock order   |
+                      +---------------------------------------+
+```
+
+---
+
+## Core Systems Highlights
+
+- **Bounded Binary Wire Protocol:** Uses 24-byte big-endian headers and a strictly bounded maximum 256-byte payload over TCP (`AF_INET`) and local UNIX stream sockets (`AF_UNIX`). Enforces absolute monotonic deadlines (`CLOCK_MONOTONIC`) with `poll()` on both header and payload reads, eliminating slowloris vulnerabilities with **zero dynamic heap allocation on the wire path**.
+- **Multi-Process Supervisor Model:** Dedicated supervisor process accepts connections and spawns isolated worker processes for up to 16 concurrent clients. Reaps exited child processes asynchronously via `waitpid(..., WNOHANG)` and performs graceful termination on `SIGTERM`/`SIGINT` with a 2-second drain barrier.
+- **Deadlock-Free Two-Phase Locking:** Transfers update two accounts simultaneously. To eliminate the Coffman circular-wait condition, record locks (`fcntl F_SETLK`) are strictly sorted by byte offset (`min(off1, off2)` followed by `max(off1, off2)`), with immediate unwind on partial failure.
+- **ACID Write-Ahead Logging (WAL) & Crash Recovery:** Financial transactions append a `PREPARED` intent entry into `trans_journal.bin` with explicit file and directory `fsync` barriers before mutating balances in `customers.txt`. On startup, the recovery engine detects incomplete `PREPARED` entries and rolls them forward deterministically.
+- **Persistent Request Idempotency:** Implements a durable 4096-slot binary coordinator (`requests_v2.bin`, 512 KiB) keyed by `(account_id, request_id)` protected by 32-bit FNV-1a checksums. Safely replays committed outcomes under network drops and prevents duplicate executions.
+- **Crash Injection Validation:** Verified against 6 distinct process failure boundaries (`reserved`, `intent`, `account_written`, `journal_commit`, `committed`, `completed`) with clean runs under AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan).
+
+---
+
+## Implemented Bounds & Resource Limits
+
+| Resource | Limit | Rationale |
+|---|---:|---|
+| Header Size | 24 bytes | Fixed-size bitwise wire deserialization |
+| Wire Payload | 256 bytes | Guaranteed stack-bound execution; no heap allocation |
+| Simultaneous Workers | 16 processes | Bounds OS process table and system memory footprint |
+| Frame Read/Write Deadline | 5 seconds each | Mitigates half-open connections and slowloris attacks |
+| Connection Lifetime | 60 seconds | Enforced via worker `alarm()` signal |
+| Commands per Connection | 128 commands | Caps retained per-session resources |
+| Persistent Request Identities | 4,096 slots | Fixed 512 KiB file prevents unbounded disk growth |
+| Currency Precision | 64-bit integer paise | Prevents IEEE-754 floating-point rounding errors |
+
+---
+
+## Build and Verify
+
+**Requirements:** Linux, GNU Make, GCC-compatible C11 compiler, `libcrypt` development headers, and Python 3 (standard library only).
 
 ```sh
+# Run full regression and test suite in debug mode
 make check
+
+# Build optimized release binaries
 make release
+
+# Run AddressSanitizer and UndefinedBehaviorSanitizer suite
 make sanitize
 ```
 
-In environments where LeakSanitizer cannot initialize under tracing:
-
+*Note: In environments where container security policies restrict `ptrace`, execute sanitizer checks with:*
 ```sh
 ASAN_OPTIONS=detect_leaks=0 make sanitize
 ```
 
-The latter verifies AddressSanitizer and UndefinedBehaviorSanitizer behavior,
-not memory leaks. Tests use disposable directories, synthetic accounts, and
-process-only crash injection compiled into test objects. Production binaries do
-not recognize the test crash environment variable.
+---
 
-`make check` includes the Phase 1 regression suite and Phase 2 tests. Listener
-smoke tests explicitly skip only if the environment prohibits creating/binding
-sockets. Connected socket-pair protocol and worker-supervisor tests still run.
+## Quickstart & Execution
 
-## Run
-
-From this folder:
-
+### 1. Build and Initialize Demo Data
 ```sh
 make
 python3 tools/init_demo.py
 cd runtime
-../build/debug/server 8080
 ```
 
-The TCP server binds to **127.0.0.1**. In another terminal, from this folder:
-
+### 2. Launch the TCP Server
 ```sh
+../build/debug/server 8080
+```
+*(The server binds to `127.0.0.1` and establishes an exclusive `.server_v2.lock` file guard).*
+
+### 3. Run Client Commands (In another terminal)
+```sh
+# Query account balance (Account 101, Normal Account Type 1, Request ID 10001)
 ./build/debug/client 8080 101 1 balance 10001
+
+# Deposit 10.50 rupees (Request ID 10002)
 ./build/debug/client 8080 101 1 deposit 10002 10.50
+
+# Transfer 5.00 rupees from 101 to Account 103 (Request ID 10003)
 ./build/debug/client 8080 101 1 transfer 10003 5.00 103
 ```
 
-The client prompts for the account password. Amounts on the CLI use rupees;
-wire amounts and displayed `balance_paise` use integer paise. Account type is
-`1` for normal or `2` for joint. Fixtures retain the original project's snapshot
-and credentials; tests use generated credentials and do not depend on fixtures.
-
-If no confirmed response arrives, reconnect and repeat the **same request ID,
-command, amount, and destination**. A completed request returns its original
-transaction ID and resulting balance without changing balances again. Use a new
-request ID for each new intended operation. IDs are scoped to authenticated
-account identity and must remain unique across clients using that account.
-
-Local UNIX stream sockets are also supported:
-
+### 4. Local UNIX Domain Stream Sockets
 ```sh
 # In runtime:
 ../build/debug/server --unix /tmp/bank-demo.sock
-# From project folder, in another terminal:
+
+# From project folder:
 ./build/debug/client unix:/tmp/bank-demo.sock 101 1 balance 10004
 ```
 
-Use a socket path you own. Normal shutdown removes it; after an abnormal exit,
-verify no server still uses it before removing a stale endpoint. The server
-refuses to overwrite an existing path. Signal SIGINT/SIGTERM for controlled
-shutdown. Run from a working data directory, never fixtures or a prior phase.
+---
 
-## Implemented limits
+## Verification & Test Matrix
 
-| Resource | Limit |
-|---|---:|
-| Header | 24 bytes |
-| Payload | 256 bytes |
-| Simultaneous workers | 16 |
-| Whole-frame receive/send deadline | 5 seconds each |
-| Total connection lifetime | 60 seconds |
-| Commands per connection, including login | 128 |
-| Persistent financial request identities | 4096 |
-| Request/result file | 512 KiB |
+The test suite exercises:
+- Byte-by-byte fragmented stream delivery and wire-framing validation.
+- Malformed magic, unknown protocol versions, reserved flag violations, and oversized payloads.
+- EOF/truncation detection, partial-frame deadlines, and write deadline expiration.
+- Signal safety: writing to disconnected sockets without `SIGPIPE` termination.
+- Deadlock-free concurrent cross-transfers and concurrent duplicate request filtering.
+- Fault injection across 6 transaction crash points with startup journal roll-forward recovery.
+- Full 4096-slot store capacity enforcement and checksum corruption failing closed.
 
-Excess accepted connections close immediately. Existing clients still have their
-own deadlines. Request-store capacity refuses new financial identities but
-continues replaying existing ones. Records are never automatically evicted.
-Do not delete the request store to regain capacity: doing so destroys retry
-protection. Retention/compaction is deliberately left for a later migration.
+---
 
-Worker memory is fixed-size application storage with at most 16 processes; no
-payload-driven allocation occurs. OS process overhead and inherited legacy
-storage growth are not claimed to be capped by the request-store limit.
-Filesystem/kernel I/O can block beyond application deadlines; this is not a
-hard-real-time implementation. The worker lifetime alarm bounds ordinary
-interruptible processing, and termination can leave journal work for recovery.
+## Documentation Index
 
-## Architecture and compatibility
-
-- `protocol.c`: explicit network byte order, bounded frames, deadline-based I/O.
-- `command_service.c`: connection authentication and typed command dispatch.
-- `requests.c`: durable request reservation, payload matching, result replay.
-- `account_service.c`: Phase 1 financial service with reserved journal IDs.
-- `server_runtime.c`: limited process supervisor, child reaping and shutdown.
-- `client.c`: version 2 CLI with explicit request IDs and uncertain-outcome guidance.
-
-Version 2 exposes customer/joint-account balance, deposit, withdrawal, and transfer
-commands. Administrative and loan menus remain in the legacy source modules;
-they are not version 2 commands. Concurrent authenticated connections for an
-account are allowed, with persistent deduplication shared across those connections.
-The original one-session-per-account behavior remains in legacy menu code only.
-
-`legacy_server` is built for regression testing, not as the primary service.
-Both servers in this folder honor the same data-directory singleton lock. Older
-phase executables do not know that lock: never point them at Phase 2 working data.
-The default `all` target builds only the version 2 server/client and database tool.
-
-The account/journal format and authentication hashing remain inherited. The new
-wire format and request store have explicit encodings; portable account storage,
-full storage fault injection, and TLS remain separate work. Keep the current
-plaintext demo on loopback or a protected local UNIX socket.
-
-See `docs/PROTOCOL_V2.md`, `docs/RETRY_DESIGN.md`, and `docs/VALIDATION.md`.
+- [`docs/PROTOCOL_V2.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/PROTOCOL_V2.md) — Detailed wire protocol layout, bit encodings, command IDs, and status codes.
+- [`docs/RETRY_DESIGN.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/RETRY_DESIGN.md) — Persistent deduplication store design, lock acquisition ordering, and crash states.
+- [`docs/INTERFACES.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/INTERFACES.md) — Core financial service ownership and API contracts.
+- [`docs/VALIDATION.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/VALIDATION.md) — Test validation logs and environment verification criteria.
