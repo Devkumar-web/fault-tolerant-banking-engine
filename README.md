@@ -154,11 +154,4 @@ The test suite exercises:
 - Fault injection across 6 transaction crash points with startup journal roll-forward recovery.
 - Full 4096-slot store capacity enforcement and checksum corruption failing closed.
 
----
 
-## Documentation Index
-
-- [`docs/PROTOCOL_V2.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/PROTOCOL_V2.md) — Detailed wire protocol layout, bit encodings, command IDs, and status codes.
-- [`docs/RETRY_DESIGN.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/RETRY_DESIGN.md) — Persistent deduplication store design, lock acquisition ordering, and crash states.
-- [`docs/INTERFACES.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/INTERFACES.md) — Core financial service ownership and API contracts.
-- [`docs/VALIDATION.md`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/docs/VALIDATION.md) — Test validation logs and environment verification criteria.
