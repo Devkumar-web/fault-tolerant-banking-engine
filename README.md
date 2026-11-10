@@ -143,7 +143,7 @@ $$\text{Reply Payload} = [\text{status: u32 (4B)}] + [\text{transaction\_id: u64
 ### Deadlock-Free Two-Phase Record Locking
 When transferring funds between account $A$ and account $B$, concurrent reverse transfers ($A \to B$ and $B \to A$) can trigger classic deadlocks under naive locking.
 
-The engine prevents this in `lock_two_customer_records()` ([`account_storage.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/account_storage.c#L70-L80)):
+The engine prevents this in `lock_two_customer_records()` ([`src/account_storage.c`](src/account_storage.c)):
 1. Determines byte offsets for both accounts: $\text{off}_1$ and $\text{off}_2$.
 2. Acquires exclusive POSIX record write lock (`F_WRLCK`) on $\min(\text{off}_1, \text{off}_2)$.
 3. Acquires exclusive write lock on $\max(\text{off}_1, \text{off}_2)$.
@@ -188,7 +188,7 @@ The engine uses Write-Ahead Logging to guarantee Atomicity and Durability across
 ```
 
 ### Startup Recovery Engine
-When [`server`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/server.c) launches, [`journal_recover_at_startup`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/txn_journal.c) runs **before** accepting any client connections:
+When [`server`](src/server.c) launches, [`journal_recover_at_startup`](src/txn_journal.c) runs **before** accepting any client connections:
 - Scans `trans_journal.bin` sequentially.
 - If a record is found in `TXN_STATE_PREPARED`, it indicates a crash occurred between Step 3 and Step 5.
 - The recovery engine verifies the customer record on disk. If the mutation was partially applied or pending, it rolls the transaction forward to completion and marks it `COMMITTED`.
@@ -198,7 +198,7 @@ When [`server`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Manag
 
 ## Persistent Request Idempotency & Deduplication
 
-To prevent duplicate debiting when clients retry after dropped network connections, [`requests.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/requests.c) maintains a durable file: `requests_v2.bin`.
+To prevent duplicate debiting when clients retry after dropped network connections, [`requests.c`](src/requests.c) maintains a durable file: `requests_v2.bin`.
 
 ### Slot Structure (128 Bytes Fixed)
 
@@ -238,16 +238,16 @@ To prevent duplicate debiting when clients retry after dropped network connectio
 
 | File | Purpose |
 |:---|:---|
-| [`src/server.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/server.c) | Server entry point; CLI argument parsing (`PORT` or `--unix SOCKET`), data-directory singleton lock (`.server_v2.lock`), startup recovery orchestration. |
-| [`src/server_runtime.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/server_runtime.c) | Process supervisor; worker forking, connection admission limit (16), non-blocking child reaping (`waitpid`), signal handling, drain and termination sequence. |
-| [`src/command_service.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/command_service.c) | Per-connection worker dispatcher; command loop, credential authentication via `crypt(3)`, command limits, session timeouts. |
-| [`src/protocol.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/protocol.c) | Binary wire protocol serializer/deserializer; big-endian integer encoding, `CLOCK_MONOTONIC` deadline-based non-blocking I/O via `poll()`. |
-| [`src/requests.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/requests.c) | 4096-slot request deduplication store; reservation writing, result replay, conflict validation, FNV-1a checksums, crash boundary hooks. |
-| [`src/account_service.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/account_service.c) | Financial business logic; deposits, withdrawals, transfers, account status validation, balance limits, crash injection points. |
-| [`src/account_storage.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/account_storage.c) | Low-level storage access; record locking (`fcntl`), ascending-order deadlock avoidance, atomic `pread`/`pwrite` on customer records. |
-| [`src/txn_journal.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/txn_journal.c) | Write-Ahead Log implementation; `PREPARED` and `COMMITTED` states, monotonic transaction counter, startup roll-forward recovery engine. |
-| [`src/client.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/src/client.c) | Production CLI client; connects over TCP or UNIX sockets, executes commands with explicit request IDs, provides retry advice. |
-| [`tests/test_phase2.c`](file:///home/eager/sys_software_lab/BANKING%20PROJECT/Bank_Management_System_Terminal_Output_Audit_Fix/Bank_Management_System_Final_Submission/phase2_bounded_protocol/tests/test_phase2.c) | Comprehensive integration test suite; protocol fragmentation, deadlines, duplicate requests, supervisor limits, and the 6 crash boundaries. |
+| [`src/server.c`](src/server.c) | Server entry point; CLI argument parsing (`PORT` or `--unix SOCKET`), data-directory singleton lock (`.server_v2.lock`), startup recovery orchestration. |
+| [`src/server_runtime.c`](src/server_runtime.c) | Process supervisor; worker forking, connection admission limit (16), non-blocking child reaping (`waitpid`), signal handling, drain and termination sequence. |
+| [`src/command_service.c`](src/command_service.c) | Per-connection worker dispatcher; command loop, credential authentication via `crypt(3)`, command limits, session timeouts. |
+| [`src/protocol.c`](src/protocol.c) | Binary wire protocol serializer/deserializer; big-endian integer encoding, `CLOCK_MONOTONIC` deadline-based non-blocking I/O via `poll()`. |
+| [`src/requests.c`](src/requests.c) | 4096-slot request deduplication store; reservation writing, result replay, conflict validation, FNV-1a checksums, crash boundary hooks. |
+| [`src/account_service.c`](src/account_service.c) | Financial business logic; deposits, withdrawals, transfers, account status validation, balance limits, crash injection points. |
+| [`src/account_storage.c`](src/account_storage.c) | Low-level storage access; record locking (`fcntl`), ascending-order deadlock avoidance, atomic `pread`/`pwrite` on customer records. |
+| [`src/txn_journal.c`](src/txn_journal.c) | Write-Ahead Log implementation; `PREPARED` and `COMMITTED` states, monotonic transaction counter, startup roll-forward recovery engine. |
+| [`src/client.c`](src/client.c) | Production CLI client; connects over TCP or UNIX sockets, executes commands with explicit request IDs, provides retry advice. |
+| [`tests/test_phase2.c`](tests/test_phase2.c) | Comprehensive integration test suite; protocol fragmentation, deadlines, duplicate requests, supervisor limits, and the 6 crash boundaries. |
 
 ---
 
